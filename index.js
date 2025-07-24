@@ -3,16 +3,22 @@ const { ethers } = require('ethers');
 const axios = require('axios');
 const { WebhookClient } = require('discord.js');
 
+// Configuration
 const ALCHEMY_WS_URL = process.env.ALCHEMY_WS_URL;
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || '';
 
+// Initialize providers and webhook
 const provider = new ethers.WebSocketProvider(ALCHEMY_WS_URL);
 const webhookClient = new WebhookClient({ url: DISCORD_WEBHOOK_URL });
 
+// Cache for token metadata to reduce API calls
 const tokenCache = new Map();
+
+// ERC-20 Transfer event ABI
 const transferEventAbi = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
 
+// Function to check if an address is a contract
 async function isContract(address) {
   try {
     const code = await provider.getCode(address);
@@ -22,6 +28,7 @@ async function isContract(address) {
   }
 }
 
+// Function to fetch token metadata
 async function getTokenMetadata(contractAddress) {
   if (tokenCache.has(contractAddress)) return tokenCache.get(contractAddress);
   try {
@@ -58,6 +65,7 @@ async function getTokenMetadata(contractAddress) {
   }
 }
 
+// Function to send Discord notification
 async function sendDiscordNotification(event) {
   const { contractAddress, to, value } = event;
   const metadata = await getTokenMetadata(contractAddress);
@@ -88,6 +96,7 @@ async function sendDiscordNotification(event) {
   }
 }
 
+// Main function to listen for mint events
 async function listenForMints() {
   console.log('Starting ERC-20 mint listener...');
   provider.on('block', async (blockNumber) => {
@@ -113,6 +122,8 @@ async function listenForMints() {
     setTimeout(listenForMints, 5000);
   });
 }
+
+// Start the listener
 listenForMints().catch((error) => {
   console.error('Failed to start listener:', error);
   process.exit(1);
