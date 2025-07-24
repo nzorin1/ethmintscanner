@@ -97,7 +97,12 @@ async function listenForMints() {
       for (const event of events) {
         const { address: contractAddress, topics, data } = event;
         if (topics[1] === '0x0000000000000000000000000000000000000000000000000000000000000000') {
-          const parsedEvent = ethers.utils.defaultAbiCoder.decode(['address', 'uint256'], ethers.utils.hexDataSlice(data, 0));
+          const abiCoder = new ethers.AbiCoder();
+const parsedEvent = abiCoder.decode(
+  ['address', 'uint256'],
+ethers.hexDataSlice(data, 0)
+);
+
           const to = ethers.utils.getAddress('0x' + topics[2].slice(-40));
           const value = parsedEvent[1];
           await sendDiscordNotification({ contractAddress, to, value });
