@@ -98,12 +98,8 @@ async function listenForMints() {
         const { address: contractAddress, topics, data } = event;
         if (topics[1] === '0x0000000000000000000000000000000000000000000000000000000000000000') {
           const abiCoder = new ethers.AbiCoder();
-const parsedEvent = abiCoder.decode(
-  ['address', 'uint256'],
-ethers.hexDataSlice(data, 0)
-);
-
-          const to = ethers.utils.getAddress('0x' + topics[2].slice(-40));
+          const parsedEvent = abiCoder.decode(['address', 'uint256'], ethers.hexDataSlice(data, 0));
+          const to = ethers.getAddress('0x' + topics[2].slice(-40));
           const value = parsedEvent[1];
           await sendDiscordNotification({ contractAddress, to, value });
         }
@@ -117,7 +113,6 @@ ethers.hexDataSlice(data, 0)
     setTimeout(listenForMints, 5000);
   });
 }
-
 listenForMints().catch((error) => {
   console.error('Failed to start listener:', error);
   process.exit(1);
