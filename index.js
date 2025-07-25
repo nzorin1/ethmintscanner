@@ -15,17 +15,27 @@ const webhookClient = new WebhookClient({ url: DISCORD_WEBHOOK_URL });
 // Cache for token metadata to reduce API calls
 const tokenCache = new Map();
 
-// ERC-20 Transfer event ABI
-const transferEventAbi = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
-const transferInterface = new ethers.utils.Interface(transferEventAbi);
+// ERC-20 ABI for validation
+const erc20Abi = [
+  'function name() view returns (string)',
+  'function symbol() view returns (string)',
+  'function decimals() view returns (uint8)',
+  'function totalSupply() view returns (uint256)'
+];
 
-// Function to check if an address is a contract
-async function isContract(address) {
+// Function to check if an address is an ERC-20 contract
+async function isERC20Contract(address) {
   try {
-    const code = await provider.getCode(address);
-    return code !== '0x';
+    const contract = new ethers.Contract(address, erc20Abi, provider);
+    await Promise.all([
+      contract.name(),
+      contract.symbol(),
+      contract.decimals(),
+      contract.totalSupply()
+    ]);
+    return true; // All ERC-20 functions exist
   } catch {
-    return false;
+    return false; // Not an ERC-20 contract
   }
 }
 
@@ -33,11 +43,13 @@ async function isContract(address) {
 async function getTokenMetadata(contractAddress) {
   if (tokenCache.has(contractAddress)) return tokenCache.get(contractAddress);
   try {
-    const contract = new ethers.Contract(contractAddress, [
-      'function name() view returns (string)',
-      'function symbol() view returns (string)',
-    ], provider);
-    const [name, symbol] = await Promise.all([contract.name(), contract.symbol()]);
+    const contract = new ethers.Contract(contractAddress, erc20Abi, provider);
+    const [name, symbol, decimals, totalSupply] = await Promise.all([
+      contract.name(),
+      contract.symbol(),
+      contract.decimals(),
+      contract.totalSupply()
+    ]);
     let icon = 'N/A', volume = 'N/A';
     try {
       const cgResponse = await axios.get(
@@ -57,80 +69,72 @@ async function getTokenMetadata(contractAddress) {
         } catch {}
       }
     }
-    const metadata = { name, symbol, icon, volume };
+    const metadata = { name, symbol, decimals, totalSupply: ethers.utils.formatEther(totalSupply), icon, volume };
     tokenCache.set(contractAddress, metadata);
     return metadata;
   } catch (error) {
     console.error(`Error fetching metadata for ${contractAddress}:`, error);
-    return { name: 'Unknown', symbol: 'Unknown', icon: 'N/A', volume: 'N/A' };
+    return { name: 'Unknown', symbol: 'Unknown', decimals: 'N/A', totalSupply: 'N/A', icon: 'N/A', volume: 'N/A' };
   }
 }
 
 // Function to send Discord notification
-async function sendDiscordNotification(event) {
-  const { contractAddress, to, value } = event;
+async function sendDiscordNotification(contractAddress, txHash) {
   const metadata = await getTokenMetadata(contractAddress);
-  const isMinterContract = await isContract(to);
-  const anonymity = isMinterContract ? 'Contract (Potentially Anonymous)' : 'Wallet (Likely Non-Anonymous)';
   const message = {
     embeds: [{
-      title: 'New ERC-20 Mint Detected',
+      title: 'New ERC-20 Token Deployed',
       color: 0x00ff00,
       fields: [
         { name: 'Contract Address', value: contractAddress, inline: true },
         { name: 'Token Name', value: metadata.name, inline: true },
         { name: 'Symbol', value: metadata.symbol, inline: true },
+        { name: 'Decimals', value: metadata.decimals.toString(), inline: true },
+        { name: 'Total Supply', value: metadata.totalSupply, inline: true },
         { name: 'Icon', value: metadata.icon, inline: true },
         { name: 'Volume (USD)', value: metadata.volume.toString(), inline: true },
-        { name: 'Minter', value: to, inline: true },
-        { name: 'Minter Anonymity', value: anonymity, inline: true },
-        { name: 'Amount Minted', value: ethers.utils.formatEther(value), inline: true },
+        { name: 'Transaction Hash', value: txHash, inline: true },
         { name: 'Timestamp', value: new Date().toISOString(), inline: true },
       ],
     }],
   };
   try {
     await webhookClient.send(message);
-    console.log(`Notification sent for mint at ${contractAddress}`);
+    console.log(`Notification sent for new token at ${contractAddress}`);
   } catch (error) {
     console.error('Error sending Discord notification:', error);
   }
 }
 
-// Main function to listen for mint events
-async function listenForMints() {
-  console.log('Starting ERC-20 mint listener...');
+// Main function to listen for new ERC-20 contract deployments
+async function listenForNewTokens() {
+  console.log('Starting ERC-20 token deployment listener...');
   console.log('Ethers version:', ethers.version);
-  provider.on('block', async (blockNumber) => {
+  provider.on('pending', async (txHash) => {
     try {
-      const filter = { topics: [ethers.utils.id('Transfer(address,address,uint256)')] };
-      const events = await provider.getLogs({ ...filter, fromBlock: blockNumber, toBlock: blockNumber });
-      for (const event of events) {
-        const { address: contractAddress, topics, data } = event;
-        if (topics[1] === '0x0000000000000000000000000000000000000000000000000000000000000000') {
-          try {
-            const parsedEvent = transferInterface.parseLog({ topics, data });
-            const to = ethers.utils.getAddress('0x' + topics[2].slice(-40));
-            const value = parsedEvent.args.value;
-            await sendDiscordNotification({ contractAddress, to, value });
-          } catch (decodeError) {
-            console.error(`Failed to decode event for contract ${contractAddress}:`, decodeError);
-            continue; // Skip invalid events
+      const tx = await provider.getTransaction(txHash);
+      if (tx && !tx.to && tx.data && tx.data !== '0x') { // Contract creation
+        const receipt = await tx.wait();
+        if (receipt.contractAddress) {
+          const isERC20 = await isERC20Contract(receipt.contractAddress);
+          if (isERC20) {
+            console.log(`New ERC-20 token detected at ${receipt.contractAddress}`);
+            await sendDiscordNotification(receipt.contractAddress, txHash);
           }
         }
       }
     } catch (error) {
-      console.error('Error processing block:', error);
+      console.error('Error processing transaction:', error);
     }
   });
   provider.websocket.on('error', (error) => {
     console.error('WebSocket error:', error);
-    setTimeout(listenForMints, 5000);
+    setTimeout(listenForNewTokens, 5000);
   });
 }
 
 // Start the listener
-listenForMints().catch((error) => {
+listenForNewTokens().catch((error) => {
   console.error('Failed to start listener:', error);
   process.exit(1);
 });
