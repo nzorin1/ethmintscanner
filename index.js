@@ -17,6 +17,7 @@ const tokenCache = new Map();
 
 // ERC-20 Transfer event ABI
 const transferEventAbi = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
+const transferInterface = new ethers.utils.Interface(transferEventAbi);
 
 // Function to check if an address is a contract
 async function isContract(address) {
@@ -107,10 +108,15 @@ async function listenForMints() {
       for (const event of events) {
         const { address: contractAddress, topics, data } = event;
         if (topics[1] === '0x0000000000000000000000000000000000000000000000000000000000000000') {
-          const parsedEvent = ethers.utils.defaultAbiCoder.decode(['address', 'uint256'], ethers.utils.hexDataSlice(data, 0));
-          const to = ethers.utils.getAddress('0x' + topics[2].slice(-40));
-          const value = parsedEvent[1];
-          await sendDiscordNotification({ contractAddress, to, value });
+          try {
+            const parsedEvent = transferInterface.parseLog({ topics, data });
+            const to = ethers.utils.getAddress('0x' + topics[2].slice(-40));
+            const value = parsedEvent.args.value;
+            await sendDiscordNotification({ contractAddress, to, value });
+          } catch (decodeError) {
+            console.error(`Failed to decode event for contract ${contractAddress}:`, decodeError);
+            continue; // Skip invalid events
+          }
         }
       }
     } catch (error) {
