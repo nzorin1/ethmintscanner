@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { ethers } = require('ethers');
+const ethers = require('ethers');
 const axios = require('axios');
 const { WebhookClient } = require('discord.js');
 
@@ -9,7 +9,7 @@ const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || '';
 
 // Initialize providers and webhook
-const provider = new ethers.WebSocketProvider(ALCHEMY_WS_URL);
+const provider = new ethers.providers.WebSocketProvider(ALCHEMY_WS_URL);
 const webhookClient = new WebhookClient({ url: DISCORD_WEBHOOK_URL });
 
 // Cache for token metadata to reduce API calls
@@ -83,7 +83,7 @@ async function sendDiscordNotification(event) {
         { name: 'Volume (USD)', value: metadata.volume.toString(), inline: true },
         { name: 'Minter', value: to, inline: true },
         { name: 'Minter Anonymity', value: anonymity, inline: true },
-        { name: 'Amount Minted', value: ethers.formatEther(value), inline: true },
+        { name: 'Amount Minted', value: ethers.utils.formatEther(value), inline: true },
         { name: 'Timestamp', value: new Date().toISOString(), inline: true },
       ],
     }],
@@ -99,16 +99,16 @@ async function sendDiscordNotification(event) {
 // Main function to listen for mint events
 async function listenForMints() {
   console.log('Starting ERC-20 mint listener...');
+  console.log('Ethers version:', ethers.version);
   provider.on('block', async (blockNumber) => {
     try {
-      const filter = { topics: [ethers.id('Transfer(address,address,uint256)')] };
+      const filter = { topics: [ethers.utils.id('Transfer(address,address,uint256)')] };
       const events = await provider.getLogs({ ...filter, fromBlock: blockNumber, toBlock: blockNumber });
       for (const event of events) {
         const { address: contractAddress, topics, data } = event;
         if (topics[1] === '0x0000000000000000000000000000000000000000000000000000000000000000') {
-          const abiCoder = new ethers.AbiCoder();
-          const parsedEvent = abiCoder.decode(['address', 'uint256'], ethers.utils.hexDataSlice(data, 0));
-          const to = ethers.getAddress('0x' + topics[2].slice(-40));
+          const parsedEvent = ethers.utils.defaultAbiCoder.decode(['address', 'uint256'], ethers.utils.hexDataSlice(data, 0));
+          const to = ethers.utils.getAddress('0x' + topics[2].slice(-40));
           const value = parsedEvent[1];
           await sendDiscordNotification({ contractAddress, to, value });
         }
